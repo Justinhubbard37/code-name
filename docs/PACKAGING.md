@@ -32,5 +32,8 @@ macOS, .deb/.AppImage on Linux).
 - [ ] `npm run tauri build` produces an installer; launch it.
 - [ ] Self-check (activity feed on boot) shows persistence/retrieval/webmcp OK.
 - [ ] Gates sever as expected (network -> cloud, tools -> sidecar/tools, fs -> ingest).
+- [ ] Cloud-capable model routes do not depend on production `VITE_` frontend secrets.
+- [ ] Keychain save/read/delete is verified on the release machine with owner-approved test keys.
+- [ ] Browser Harness remains disabled/stubbed unless its safety gates are complete.
 - [ ] Icons + product name correct in the installed app.
 - [ ] Code-sign (Windows/macOS) before distribution (not configured yet).

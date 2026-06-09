@@ -1,11 +1,9 @@
 /**
  * Model-agnostic, local-first LLM transport.
  *
- * Hits every supported endpoint family through one interface:
- *   - ollama            -> POST /api/chat        (NDJSON stream)
- *   - openai / lmstudio -> POST /v1/chat/completions (SSE stream)
- *   - custom            -> OpenAI-compatible by default
- *   - gemini (cloud)    -> @google/genai stream  (secondary)
+ * Hits every supported endpoint family through one interface. Pure loopback
+ * local providers may use direct fetch; cloud/non-loopback providers go through
+ * the Rust model proxy so production cloud secrets stay out of the webview.
  *
  * If an endpoint is unreachable (offline, gate closed, no key) the caller
  * receives a synthetic local stream so the canvas always responds.
@@ -26,6 +24,10 @@ export interface StreamCallbacks {
   signal?: AbortSignal;
 }
 
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
 function env(name?: string): string | undefined {
   if (!name) return undefined;
   const e = (import.meta as unknown as { env?: Record<string, string> }).env || {};
@@ -37,11 +39,30 @@ function env(name?: string): string | undefined {
  * panel), then fall back to an environment variable of the same name. Keeps the
  * env path working when the keychain is unavailable.
  */
-async function resolveKey(apiKeyEnv?: string): Promise<string | undefined> {
+async function resolveKey(apiKeyEnv?: string, allowFrontendEnv = false): Promise<string | undefined> {
   if (!apiKeyEnv) return undefined;
   const vault = await getSecret(apiKeyEnv);
   if (vault) return vault;
+  if (!allowFrontendEnv) return undefined;
   return env(apiKeyEnv);
+}
+
+export function isLoopbackEndpoint(ep: Endpoint): boolean {
+  try {
+    const u = new URL(ep.baseUrl);
+    const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch {
+    return false;
+  }
+}
+
+export function usesDirectFrontendTransport(ep: Endpoint): boolean {
+  return ep.kind !== 'a2a' && !reachesNetwork(ep) && isLoopbackEndpoint(ep);
+}
+
+export function requiresRustModelProxy(ep: Endpoint): boolean {
+  return ep.kind !== 'a2a' && !usesDirectFrontendTransport(ep);
 }
 
 /* ------------------------------------------------------------------ */
@@ -55,7 +76,20 @@ export async function pingEndpoint(ep: Endpoint): Promise<{ ok: boolean; detail:
   const cloud = reachesNetwork(ep);
   let key: string | undefined;
   try {
-    key = await resolveKey(keyName);
+    if (requiresRustModelProxy(ep)) {
+      try {
+        const models = await listModelsViaRust(ep);
+        clearTimeout(t);
+        return {
+          ok: true,
+          detail: models.length ? `${models.length} model(s) via Rust` : 'Rust model proxy',
+        };
+      } catch (err) {
+        clearTimeout(t);
+        return { ok: false, detail: err instanceof Error ? err.message : 'Rust proxy unavailable' };
+      }
+    }
+    key = await resolveKey(keyName, true);
     // Local-first: an endpoint that needs a key but has none is reported offline
     // WITHOUT any network call — nothing leaves the machine until a key exists.
     if (keyName && !key) {
@@ -125,12 +159,19 @@ function keyNameFor(ep: Endpoint): string | undefined {
  * Returns [] for gemini/a2a or on any error (caller keeps the typed model).
  */
 export async function listModels(ep: Endpoint): Promise<string[]> {
-  if (ep.kind === 'gemini' || ep.kind === 'a2a') return [];
+  if (ep.kind === 'a2a') return [];
+  if (requiresRustModelProxy(ep)) {
+    try {
+      return await listModelsViaRust(ep);
+    } catch {
+      return [];
+    }
+  }
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 2500);
   const base = ep.baseUrl.replace(/\/$/, '');
   const headers: Record<string, string> = {};
-  const key = await resolveKey(keyNameFor(ep));
+  const key = await resolveKey(keyNameFor(ep), true);
   if (key) headers.Authorization = `Bearer ${key}`;
   try {
     const url = ep.kind === 'ollama' ? `${base}/api/tags` : `${base}/v1/models`;
@@ -164,6 +205,7 @@ export async function streamChat(
 ): Promise<string> {
   try {
     cb.onActivity?.('network', `${ep.label} · ${ep.model} · ${ep.kind.toUpperCase()}`);
+    if (requiresRustModelProxy(ep)) return await streamViaRust(ep, profile, turns, cb);
     if (ep.kind === 'ollama') return await streamOllama(ep, profile, turns, cb);
     if (ep.kind === 'gemini') return await streamGemini(ep, turns, cb);
     return await streamOpenAI(ep, profile, turns, cb); // openai | lmstudio | custom
@@ -181,7 +223,7 @@ async function streamOllama(
   cb: StreamCallbacks,
 ): Promise<string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const key = await resolveKey(keyNameFor(ep));
+  const key = await resolveKey(keyNameFor(ep), true);
   if (key) headers.Authorization = `Bearer ${key}`;
   const res = await fetch(`${ep.baseUrl.replace(/\/$/, '')}/api/chat`, {
     method: 'POST',
@@ -225,7 +267,7 @@ async function streamOpenAI(
   cb: StreamCallbacks,
 ): Promise<string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const key = await resolveKey(keyNameFor(ep));
+  const key = await resolveKey(keyNameFor(ep), true);
   if (key) headers.Authorization = `Bearer ${key}`;
   const res = await fetch(`${ep.baseUrl.replace(/\/$/, '')}/v1/chat/completions`, {
     method: 'POST',
@@ -266,7 +308,7 @@ async function streamOpenAI(
 }
 
 async function streamGemini(ep: Endpoint, turns: ChatTurn[], cb: StreamCallbacks): Promise<string> {
-  const key = await resolveKey(keyNameFor(ep));
+  const key = await resolveKey(keyNameFor(ep), false);
   if (!key) throw new Error('no API key');
   cb.onModel?.(ep.model); // Gemini serves the requested model
 
@@ -284,6 +326,49 @@ async function streamGemini(ep: Endpoint, turns: ChatTurn[], cb: StreamCallbacks
       cb.onToken(tok);
     }
   }
+  return full;
+}
+
+async function listModelsViaRust(ep: Endpoint): Promise<string[]> {
+  if (!isTauri()) throw new Error('desktop Rust model proxy required');
+  const { invoke } = await import('@tauri-apps/api/core');
+  return await invoke<string[]>('model_list', {
+    kind: ep.kind,
+    baseUrl: ep.baseUrl,
+    keyName: keyNameFor(ep),
+    fallbackKey: undefined,
+  });
+}
+
+async function streamViaRust(
+  ep: Endpoint,
+  profile: ConfigProfile,
+  turns: ChatTurn[],
+  cb: StreamCallbacks,
+): Promise<string> {
+  if (!isTauri()) throw new Error('desktop Rust model proxy required');
+  const { invoke, Channel } = await import('@tauri-apps/api/core');
+  let full = '';
+  const channel = new Channel<string>();
+  channel.onmessage = (tok) => {
+    full += tok;
+    cb.onToken(tok);
+  };
+  const served = await invoke<string>('model_stream', {
+    req: {
+      kind: ep.kind,
+      baseUrl: ep.baseUrl,
+      model: ep.model,
+      keyName: keyNameFor(ep),
+      fallbackKey: undefined,
+      temperature: profile.temperature,
+      numCtx: profile.contextWindow,
+      messages: turns,
+      cloud: reachesNetwork(ep),
+    },
+    onEvent: channel,
+  });
+  if (served) cb.onModel?.(served);
   return full;
 }
 

@@ -64,7 +64,7 @@ Read this once. It explains the words used all through the plan.
 CODE NAME already has a lot built and working:
 
 - A polished two-pane desktop window (Mission Control on the left, Execution Canvas on the right).
-- Chat that streams from real local models (Ollama, LM Studio, OpenAI-style) and from Gemini, with an offline "synthetic" reply when nothing is connected.
+- Chat that streams from real loopback local models (Ollama, LM Studio, OpenAI-style), with cloud-capable routes mediated by the Rust model proxy and an offline "synthetic" reply when nothing is connected.
 - A knowledge graph that saves to the browser database (IndexedDB) and survives restarts.
 - One safe "front door" for all graph changes, and an audit log that records every change.
 - A 3D graph view you can orbit and zoom, with cards that shrink to dots when far away.
@@ -76,9 +76,10 @@ But several big pieces are only "pretend" for now, and the plan below turns them
 
 - The agent only **echoes** your words. There is no real "brain" yet.
 - There is **no real vector store** and **no real GraphRAG**. Search is keyword-only.
-- The **gates only block things in the web layer.** The Rust shell does not truly cut the wire, and the secret token is handed to the web page. This is the biggest security gap.
+- The **sidecar token and A2A streaming path are now Rust-mediated**, and the Tools gate blocks the sidecar at the command layer. Remaining security work includes cloud model routing hardening, per-tab authorization coverage, and deeper release hardening.
 - The browser tool does not really open a browser.
-- There are **no automated tests**, no installer, and a few small clean-ups needed (web fonts load from the internet, stale names, dead 2D code).
+- Automated tests exist but are still small; installer verification and a few
+  clean-ups remain (web fonts load from the internet, stale names, dead 2D code).
 
 The phases below fix all of this and then push far past it.
 
@@ -144,9 +145,9 @@ A quick note on order. Phase 0 and Phase 1 come first because they make everythi
 - **Steps:**
   1. Update `metadata.json` name/description to "CODE NAME".
   2. Rename the package in `package.json` from `react-example` to `codename`.
-  3. Fix the Gemini key note: document `VITE_GEMINI_API_KEY` in `.env.example` so the key actually reaches the app.
+  3. Fix the Gemini key note: production cloud keys must not depend on `VITE_` frontend env paths; use OS keychain/Rust-mediated routing for cloud-capable providers.
 - **Files:** `metadata.json`, `package.json`, `.env.example`.
-- **Done when:** names read correctly and a set `VITE_GEMINI_API_KEY` makes the Gemini endpoint show "ready."
+- **Done when:** names read correctly and cloud-capable endpoints can be configured without exposing production secrets to the webview.
 - **Stays safe:** text/name changes only.
 
 ### Slice 0.5 — Rename the confusing twin panels
@@ -286,6 +287,10 @@ A quick note on order. Phase 0 and Phase 1 come first because they make everythi
 
 ### Slice 2.4 — Keep API keys in the OS secret store
 - **Goal:** Stop depending on environment variables for secrets.
+- **Current status note:** OS keychain commands and the Secrets panel exist, but
+  Phase 1 intentionally deferred runtime keychain save/read/delete testing until
+  explicit owner approval. Production cloud routes should not rely on frontend
+  `VITE_` secret paths.
 - **Steps:**
   1. Add a Tauri command to read/write keys in the OS keychain (use the Tauri keyring/stronghold plugin).
   2. Add a small "Secrets" section in the drawer to set the Ollama and Gemini keys.

@@ -110,8 +110,8 @@ export function EndpointEditor({
             Local (not blocked by the Network gate)
           </label>
           <div className="text-[8px] font-mono text-neutral-600 leading-relaxed">
-            Secret keys are read from your environment by the name above. Don't paste a raw key
-            here — in-app secret storage (OS keychain) comes in a later step.
+            Secret values are not stored in endpoint config. Save keys in the Secrets panel or OS
+            keychain; this field names the key or env fallback only.
           </div>
 
           <div className="flex gap-2 pt-1">

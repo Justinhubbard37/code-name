@@ -52,3 +52,13 @@ Point the stealth drawer (bottom-left `>`) at a local endpoint:
 
 The status capsule reads READY once an endpoint responds. With none connected,
 chat falls back to an offline synthetic stream so the UI stays demoable.
+
+## Runtime security notes
+
+- The Python sidecar bearer token is held by the Rust shell and is not serialized
+  to the webview.
+- Direct frontend model calls are for loopback local providers only. Cloud-capable
+  or non-loopback providers should go through the Rust model proxy.
+- API key values belong in the OS keychain via the Secrets panel when set. Frontend
+  `VITE_` env keys are development fallbacks, not production secret storage.
+- Browser Harness remains a paused/stubbed seam until its safety policy is built.

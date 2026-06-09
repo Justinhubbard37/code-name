@@ -17,8 +17,8 @@ _2026-06-06 · tsc clean + vite build green (2482 modules)._
 - **Browser Harness seam** (`browser.open` WebMCP tool): requires the tab's
   BROWSER capability, leases a context from the shared pool, then forwards to the
   sidecar Browser Harness over A2A (stub message when the sidecar is offline).
-- **Permission-aware shared memory**: the KG stays global; tab agents write
-  through the gated + audited commit chokepoint, now scoped by the tab's
+- **Permission-aware shared memory and ingestion**: the KG stays global; tab
+  agents write and ingest through gated + audited paths, now scoped by the tab's
   effective filesystem permission.
 - **EnvironmentBar** UI (left pane, under the tabs): session id, per-tab
   capability toggles (BROWSER/TOOLS/NET/FS), and live shared-pool usage.
@@ -46,7 +46,7 @@ gate scope. Capabilities bind to tabs; the supervisor satisfies them from pools.
 ## Exit criteria — met
 - Two tabs run off shared pools with isolated sessions + distinct gate scopes. ✅
 - Browser action requires tab permission + a pool lease. ✅
-- Tab agents read/write the global KG under permission + audit. ✅
+- Tab agents read/write and ingest into the global KG under permission + audit. ✅
 - Typechecks + builds. ✅
 
 **Next:** Phase 6 — hardening: local-first degradation checks, audit-ledger
