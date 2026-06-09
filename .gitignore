@@ -10,3 +10,8 @@ coverage/
 # Rust / Tauri
 src-tauri/target/
 src-tauri/gen/
+
+# Python generated cache
+__pycache__/
+*.pyc
+
