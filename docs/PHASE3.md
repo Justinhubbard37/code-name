@@ -11,11 +11,14 @@ _2026-06-06 · Python round-trip tested in-sandbox; tsc clean + vite build green
 - **Rust supervisor** (`src-tauri/src/sidecar.rs` + `lib.rs`) — spawns the
   sidecar, reads the handshake on a thread, holds `{host,port,token,status}` in
   managed state, detects exit (stdout EOF → `error`), kills it on app exit.
-  Commands: `sidecar_info`, `sidecar_restart`. Script bundled as a Tauri resource.
+  Commands include `sidecar_info`, `sidecar_restart`, `sidecar_send`,
+  `sidecar_stream`, `sidecar_cancel`, and `set_gates`. Script bundled as a
+  Tauri resource.
 - **TS A2A client** (`src/lib/sidecar.ts`) — `getSidecarInfo()` via the Rust
-  command (Tauri-guarded) + `streamA2A()` thin JSON-RPC/SSE client. New `a2a`
-  endpoint kind ("Agent Sidecar (A2A)"); selecting it routes chat through the
-  sidecar. The **tools gate** severs the bridge; status comes from the supervisor.
+  command (Tauri-guarded) + `streamA2A()` via the Rust `sidecar_stream` bridge.
+  New `a2a` endpoint kind ("Agent Sidecar (A2A)"); selecting it routes chat
+  through the supervised sidecar. The **tools gate** severs the bridge at the
+  Rust command layer; status comes from the supervisor.
 
 ## Verified in sandbox (Python half)
 - Handshake on stdout (ephemeral port + token). ✅
@@ -27,11 +30,11 @@ _2026-06-06 · Python round-trip tested in-sandbox; tsc clean + vite build green
    (JSON-RPC + SSE, 0.3) on both ends — verifiable and dependency-free — behind
    functions where `a2a-sdk` (Python) and `@a2a-js/sdk` (TS) swap in. Honors the
    local-first / offline requirement (no pip installs needed to round-trip).
-2. **Gate coupling:** the **tools gate** governs the sidecar bridge from the app
-   layer; the Rust supervisor owns the OS-level process. (Phase 6 can move the
-   sever into Rust for a true bridge cut.)
-3. **Token reaches the webview** so the TS client can authenticate. Acceptable
-   for the trusted app shell; tighten later by proxying A2A through Rust.
+2. **Gate coupling:** the **tools gate** governs the sidecar bridge at the Rust
+   command layer; the Rust supervisor owns the OS-level process.
+3. **Token stays in Rust/shell memory.** The webview receives sidecar status
+   without the bearer token and streams through Rust instead of authenticating
+   directly to the sidecar.
 
 ## Not verified here / refine later
 - **Rust does not compile in this sandbox** (no cargo). The supervisor is written

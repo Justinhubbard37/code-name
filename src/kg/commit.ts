@@ -10,13 +10,19 @@ import type {
   AuditRecord,
   GateDecision,
   SecurityGates,
+  TabCaps,
 } from '../types';
+import { effectiveGates } from '../lib/perms';
 
 export function evaluateKgWrite(gates: SecurityGates): GateDecision {
   if (!gates.filesystem) {
     return { allowed: false, gate: 'filesystem', reason: 'filesystem gate closed' };
   }
   return { allowed: true, gate: 'filesystem' };
+}
+
+export function evaluateScopedKgWrite(global: SecurityGates, caps: TabCaps): GateDecision {
+  return evaluateKgWrite(effectiveGates(global, caps));
 }
 
 export function makeAudit(p: {

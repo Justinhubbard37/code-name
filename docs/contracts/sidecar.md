@@ -15,15 +15,18 @@
 4. Rust reads that line to learn the port + token; nothing is hard-coded.
 
 ## Auth
-- Every A2A call from the TS client carries `Authorization: Bearer <token>`.
-- Inject via the A2A JS SDK `CallInterceptor` / `createAuthenticatingFetchWithRetry`.
+- Every A2A call from the Rust shell carries `Authorization: Bearer <token>`.
+- The webview invokes Rust commands and does not receive the bearer token.
+- If an official A2A SDK is adopted later, its authentication hook must live on
+  the shell/sidecar boundary, not in React state.
 - Sidecar rejects any request without the exact token (401).
 
 ## Defense in depth
 - Loopback-only bind **plus** per-session token: other local processes and
-  webview tabs cannot drive the sidecar even though the port is local.
+  webview code cannot drive the sidecar through an unauthenticated direct call
+  even though the port is local.
 - Token lives only in shell memory for the process lifetime; new token per launch.
 
 ## Gate coupling
 - Closing the **network** or **tools** gate severs/limits the sidecar bridge at
-  the Rust supervisor, not just the UI (Phase 3).
+  the Rust command layer, not just the UI.

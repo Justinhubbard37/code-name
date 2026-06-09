@@ -1,8 +1,10 @@
 /**
  * TS-side bridge to the Rust-supervised Python agent sidecar (Phase 3).
- * - getSidecarInfo() reads {host,port,token,status} from the Rust command.
- * - streamA2A() is a thin A2A client (JSON-RPC message/stream over SSE) matching
- *   the sidecar + A2A 0.3 shape; swap in @a2a-js/sdk later behind this function.
+ * - getSidecarInfo() reads {host,port,status} from the Rust command.
+ * - streamFromSidecar() streams through the Rust command layer; the token stays
+ *   in shell memory.
+ * - streamA2A() is a legacy/test-only thin A2A parser matching the sidecar + A2A
+ *   0.3 shape; swap in an SDK later behind the Rust-mediated boundary.
  * All Tauri access is guarded so the app still runs in a plain browser.
  */
 export interface SidecarInfo {
@@ -86,7 +88,7 @@ export async function streamA2A(
   cb: A2ACallbacks,
 ): Promise<string> {
   const url = `http://${info.host}:${info.port}/a2a`;
-  cb.onActivity?.('network', `A2A → ${info.host}:${info.port} (token-auth)`);
+  cb.onActivity?.('network', `A2A → ${info.host}:${info.port} (direct test parser)`);
   const body = JSON.stringify({
     jsonrpc: '2.0',
     id: Date.now(),

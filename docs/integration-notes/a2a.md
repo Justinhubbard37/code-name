@@ -18,7 +18,7 @@
   - `c.sendMessage({ message:{ messageId, role:'user', parts:[{kind:'text',text}], kind:'message' }})`.
   - `c.sendMessageStream(params)` → **AsyncGenerator** of `task` / `status-update` / `artifact-update` events (SSE) — maps directly onto our streaming chat + activity feed.
   - Per-call `{ signal: AbortSignal.timeout(ms) }` — reuse for our STOP/abort.
-  - **`CallInterceptor` / `createAuthenticatingFetchWithRetry`** → inject our per-launch bearer token (P0.2 auth contract) as a header on every call. This is the hook for sidecar auth.
+  - **`CallInterceptor` / `createAuthenticatingFetchWithRetry`** → if adopted later, the auth hook must stay behind the Rust shell/sidecar boundary. The webview must not receive or serialize the per-launch bearer token.
 - **Server (optional, TS):** `AgentExecutor` + `DefaultRequestHandler` + Express handlers, if we ever run a TS-side agent.
 - **Offline/local-first:** pure localhost HTTP; loopback-friendly by construction.
 - **Decision needed:** align spec version across Python (1.0) and JS (0.3 stable vs 1.0 alpha). Default to 0.3 on both for stability now.

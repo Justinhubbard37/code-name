@@ -51,13 +51,13 @@ import {
 import { hashFile } from '../lib/hash';
 import { pingEndpoint, streamChat, listModels, reachesNetwork, type ChatTurn } from '../lib/llm';
 import { kgStore } from '../kg/store';
-import { evaluateKgWrite, makeAudit } from '../kg/commit';
+import { evaluateKgWrite, evaluateScopedKgWrite, makeAudit } from '../kg/commit';
 import { retriever } from '../kg/retrieve';
 import { getSidecarInfo, streamFromSidecar, cancelSidecar } from '../lib/sidecar';
 import { installWebMcp, setToolGuard, setToolLogger, registerTool } from '../lib/webmcp';
 import { setAgentUI } from '../components/right/a2ui/bus';
 import type { A2UIPayload } from '../components/right/a2ui/types';
-import { effectiveGates } from '../lib/perms';
+import { effectiveGates, FULL_CAPS } from '../lib/perms';
 import { runSelfCheck } from '../lib/selfcheck';
 import { lease as poolLease, releaseAll as poolReleaseAll } from '../lib/pools';
 
@@ -285,6 +285,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const gatesRef = useRef(gates);
   gatesRef.current = gates;
 
+  const taskEffectiveGates = useCallback((taskId: string): SecurityGates => {
+    const task = tasksRef.current.find((t) => t.id === taskId);
+    return effectiveGates(gatesRef.current, task?.session.caps ?? FULL_CAPS);
+  }, []);
+
   // Save config (endpoints, presets, active preset, gates) whenever it changes.
   useEffect(() => {
     saveConfig({ endpoints, profiles, activeProfileId, gates });
@@ -442,7 +447,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       provenance?: { source?: string; ingestionId?: string };
     }): boolean => {
       const targetId = spec.node?.id ?? spec.removeNodeId ?? 'unknown';
-      const decision = evaluateKgWrite(gatesRef.current);
+      const taskId = spec.actor.taskId ?? activeTaskIdRef.current;
+      const activeTaskId = taskId;
+      const task = tasksRef.current.find((t) => t.id === taskId);
+      const decision = task
+        ? evaluateScopedKgWrite(gatesRef.current, task.session.caps)
+        : evaluateKgWrite(gatesRef.current);
       kgStore
         .appendAudit(
           makeAudit({
@@ -473,7 +483,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       }
       return true;
     },
-    [activeTaskId, pushActivity],
+    [pushActivity],
   );
 
   const updateNodeData = useCallback(
@@ -682,7 +692,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   quarantineRef.current = quarantine;
 
   const createDocNode = useCallback(
-    (name: string, text: string, hash: string): string => {
+    (name: string, text: string, hash: string, taskId = activeTaskIdRef.current): string => {
       const id = `doc-${uuidv4().slice(0, 8)}`;
       const node: AppNode = {
         id,
@@ -710,13 +720,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       commit({
         action: 'create',
         node,
-        actor: { kind: 'system', id: 'ingest', taskId: activeTaskId },
+        actor: { kind: 'system', id: 'ingest', taskId },
         diff: `ingest ${name}`,
         provenance: { source: name, ingestionId: id },
       });
       return id;
     },
-    [commit, activeTaskId],
+    [commit],
   );
 
   // Install the WebMCP shim and register built-in, gate-routed tools (Phase 4).
@@ -724,7 +734,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     installWebMcp();
     setToolGuard(() => {
       const task = tasksRef.current.find((t) => t.id === activeTaskIdRef.current);
-      const caps = task?.session.caps ?? { browser: true, tools: true, network: true, filesystem: true };
+      const caps = task?.session.caps ?? FULL_CAPS;
       const eff = effectiveGates(gatesRef.current, caps);
       return eff.tools ? { allowed: true } : { allowed: false, reason: 'tools gate/scope closed' };
     });
@@ -818,7 +828,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const ingestFiles = useCallback(
     async (files: File[]) => {
-      if (!gatesRef.current.filesystem) {
+      const taskId = activeTaskIdRef.current;
+      const activeTaskId = taskId;
+      const eff = taskEffectiveGates(taskId);
+      if (!eff.filesystem) {
         pushActivity(activeTaskId, 'system', 'filesystem gate closed — ingestion blocked');
         const blocked: QuarantineItem = {
           id: uuidv4().slice(0, 8),
@@ -870,7 +883,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           );
           pushActivity(activeTaskId, 'system', `redundancy detected: ${file.name} ↔ ${conflict.data.label}`);
         } else {
-          const nodeId = createDocNode(file.name, text, hash);
+          const nodeId = createDocNode(file.name, text, hash, taskId);
           setQuarantine((q) =>
             q.map((it) => (it.id === itemId ? { ...it, hash, status: 'indexed', note: nodeId } : it)),
           );
@@ -878,7 +891,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [activeTaskId, createDocNode, pushActivity],
+    [createDocNode, pushActivity, taskEffectiveGates],
   );
 
   const resolveConflict = useCallback(

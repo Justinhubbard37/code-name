@@ -5,9 +5,8 @@
  * webview's own storage — it works in the Tauri window and in browser dev. The
  * knowledge graph uses IndexedDB (kg/store.ts); this is just small config.
  *
- * NOTE: we deliberately do NOT store secret API key *values* here — only the
- * name of the environment variable that holds the key. Real in-app secret
- * storage (OS keychain) is a later step in the blueprint.
+ * NOTE: we deliberately do NOT store secret API key *values* here. Endpoint
+ * config stores only the key name; values live in the OS keychain when set.
  */
 import type { Endpoint, ConfigProfile, SecurityGates } from '../types';
 import { defaultEndpoints, defaultProfiles, defaultGates } from './defaults';
