@@ -1,0 +1,43 @@
+import { ChevronDown, ChevronRight, Bot } from 'lucide-react';
+import { useApp } from '../../state/AppState';
+import { StatusModule } from './StatusModule';
+
+export function AgentHeader() {
+  const { activeTask, showActivity, setShowActivity, activeEndpoint, runningModel } = useApp();
+  const activityCount = activeTask.activity.length;
+  // The model actually running this chat: what the server last confirmed, or the
+  // chosen model before the first reply.
+  const model = runningModel || activeEndpoint.model;
+
+  return (
+    <div className="flex items-center justify-between gap-2 px-3 h-10 bg-neutral-950 border-b border-neutral-800 shrink-0">
+      <div className="flex items-center gap-2 min-w-0">
+        <Bot className="w-4 h-4 text-emerald-400 shrink-0" />
+        <span className="font-mono text-xs text-neutral-200 tracking-wider truncate">
+          {activeTask.agent}
+        </span>
+        <span className="text-[9px] text-neutral-600 font-mono uppercase truncate">
+          {activeTask.name}
+        </span>
+        <span
+          className="text-[9px] font-mono text-sky-400/80 border border-neutral-800 px-1 py-0.5 rounded truncate max-w-[180px]"
+          title="Model actually running this chat (server-verified)"
+        >
+          {model}
+        </span>
+        <button
+          onClick={() => setShowActivity(!showActivity)}
+          className="flex items-center gap-0.5 text-[9px] font-mono text-neutral-500 hover:text-neutral-200 border border-neutral-800 hover:border-neutral-600 rounded px-1 py-0.5"
+          title={showActivity ? 'Collapse activity stream' : 'Expand activity stream'}
+        >
+          {showActivity ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          LOGIC
+          {activityCount > 0 && (
+            <span className="text-emerald-400/80">{activityCount}</span>
+          )}
+        </button>
+      </div>
+      <StatusModule />
+    </div>
+  );
+}

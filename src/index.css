@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+/*
+ * Offline-first fonts: no network @import. We use the platform's built-in
+ * sans and monospace stacks so the app renders fully with no internet.
+ * (Space Grotesk / JetBrains Mono can be re-added later as bundled font files
+ *  via @fontsource if we want the exact look without a network call.)
+ */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "Consolas", "JetBrains Mono", SFMono-Regular, monospace;
+}
+
+body {
+  margin: 0;
+  background-color: #0a0a0a;
+  overflow: hidden;
+}
+
+/* Custom styles for ReactFlow specific to the dark theme */
+.react-flow__edge-path {
+  stroke-dasharray: 2, 2;
+}
+
+/* Hide horizontal scrollbar on the task tab strip */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Slimmer scrollbars in dark panels */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
