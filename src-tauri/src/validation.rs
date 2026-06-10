@@ -178,6 +178,16 @@ pub fn validate_webmcp_tool_name(name: &str) -> Result<(), String> {
     }
 }
 
+pub fn validate_sidecar_message(message: &str) -> Result<(), String> {
+    if message.trim().is_empty() {
+        return Err("sidecar message is required".to_string());
+    }
+    if message.len() > MAX_MESSAGE_TEXT_LENGTH {
+        return Err("sidecar message is too long".to_string());
+    }
+    Ok(())
+}
+
 pub fn redact_secrets(input: &str) -> String {
     let mut out = Vec::new();
     let mut redact_next_bearer_value = false;
@@ -227,7 +237,11 @@ mod tests {
 
     #[test]
     fn accepts_loopback_endpoint() {
-        for raw in ["http://localhost:11434", "http://127.0.0.1:1234", "http://[::1]:8000"] {
+        for raw in [
+            "http://localhost:11434",
+            "http://127.0.0.1:1234",
+            "http://[::1]:8000",
+        ] {
             let policy = validate_endpoint_url(raw).unwrap();
             assert_eq!(policy.class, EndpointClass::Loopback);
             assert!(policy.frontend_direct_allowed);
@@ -284,7 +298,8 @@ mod tests {
 
     #[test]
     fn redacts_secret_like_values() {
-        let redacted = redact_secrets("token=abc123 Bearer xyz.abc.123 sk-abcdefghijklmnopqrstuvwxyz");
+        let redacted =
+            redact_secrets("token=abc123 Bearer xyz.abc.123 sk-abcdefghijklmnopqrstuvwxyz");
         assert!(redacted.contains("token=[REDACTED]"));
         assert!(redacted.contains("Bearer [REDACTED]"));
         assert!(redacted.contains("sk-[REDACTED]"));

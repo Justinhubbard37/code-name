@@ -13,6 +13,10 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::sidecar::GateState;
+use crate::validation::{
+    redact_secrets, validate_endpoint_kind, validate_endpoint_url, validate_model_request_bounds,
+    validate_secret_name, ModelMessage,
+};
 
 const SERVICE: &str = "com.codename.harness";
 
@@ -51,10 +55,48 @@ fn read_key(key_name: &Option<String>, fallback: &Option<String>) -> Option<Stri
     fallback.clone().filter(|s| !s.is_empty())
 }
 
+fn sanitize_error(error: impl ToString) -> String {
+    redact_secrets(&error.to_string())
+}
+
+fn validate_key_name(key_name: &Option<String>) -> Result<(), String> {
+    if let Some(name) = key_name {
+        validate_secret_name(name).map_err(sanitize_error)?;
+    }
+    Ok(())
+}
+
+fn validate_model_list_request(
+    kind: &str,
+    base_url: &str,
+    key_name: &Option<String>,
+) -> Result<(), String> {
+    validate_endpoint_kind(kind).map_err(sanitize_error)?;
+    validate_endpoint_url(base_url).map_err(sanitize_error)?;
+    validate_key_name(key_name)?;
+    Ok(())
+}
+
+fn validate_model_stream_request(req: &ModelReq) -> Result<(), String> {
+    validate_endpoint_kind(&req.kind).map_err(sanitize_error)?;
+    validate_endpoint_url(&req.base_url).map_err(sanitize_error)?;
+    validate_key_name(&req.key_name)?;
+    let messages = req
+        .messages
+        .iter()
+        .map(|msg| ModelMessage {
+            content: msg.content.as_str(),
+        })
+        .collect::<Vec<_>>();
+    validate_model_request_bounds(&req.model, req.temperature, req.num_ctx, &messages)
+        .map_err(sanitize_error)
+}
+
 async fn http_error(resp: reqwest::Response, model: &str) -> String {
     let status = resp.status().as_u16();
     let body = resp.text().await.unwrap_or_default();
-    let detail: String = body.chars().take(200).collect();
+    let detail = sanitize_error(body.chars().take(200).collect::<String>());
+    let model = sanitize_error(model);
     let missing = status == 404 || detail.to_lowercase().contains("not found");
     if missing {
         format!("model \"{model}\" not found at this endpoint (HTTP {status})")
@@ -73,6 +115,7 @@ pub async fn model_list(
     key_name: Option<String>,
     fallback_key: Option<String>,
 ) -> Result<Vec<String>, String> {
+    validate_model_list_request(&kind, &base_url, &key_name)?;
     let base = base_url.trim_end_matches('/');
     let key = read_key(&key_name, &fallback_key);
     let url = if kind == "ollama" {
@@ -84,16 +127,16 @@ pub async fn model_list(
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(15))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(sanitize_error)?;
     let mut rb = client.get(&url);
     if let Some(k) = &key {
         rb = rb.header("Authorization", format!("Bearer {k}"));
     }
-    let resp = rb.send().await.map_err(|e| e.to_string())?;
+    let resp = rb.send().await.map_err(sanitize_error)?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status().as_u16()));
     }
-    let v: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let v: serde_json::Value = resp.json().await.map_err(sanitize_error)?;
     let names: Vec<String> = if kind == "ollama" {
         v.get("models")
             .and_then(|m| m.as_array())
@@ -124,6 +167,7 @@ pub async fn model_stream(
     on_event: Channel<String>,
     gates: State<'_, GateState>,
 ) -> Result<String, String> {
+    validate_model_stream_request(&req)?;
     if req.cloud && !gates.network_open() {
         return Err("network gate closed".to_string());
     }
@@ -132,7 +176,7 @@ pub async fn model_stream(
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(sanitize_error)?;
 
     let mut served = String::new();
 
@@ -147,12 +191,12 @@ pub async fn model_stream(
         if let Some(k) = &key {
             rb = rb.header("Authorization", format!("Bearer {k}"));
         }
-        let mut resp = rb.send().await.map_err(|e| e.to_string())?;
+        let mut resp = rb.send().await.map_err(sanitize_error)?;
         if !resp.status().is_success() {
             return Err(http_error(resp, &req.model).await);
         }
         let mut buf = String::new();
-        while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        while let Some(chunk) = resp.chunk().await.map_err(sanitize_error)? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(idx) = buf.find('\n') {
                 let line = buf[..idx].trim().to_string();
@@ -172,7 +216,7 @@ pub async fn model_stream(
                         .and_then(|c| c.as_str())
                     {
                         if !tok.is_empty() {
-                            on_event.send(tok.to_string()).map_err(|e| e.to_string())?;
+                            on_event.send(tok.to_string()).map_err(sanitize_error)?;
                         }
                     }
                 }
@@ -191,12 +235,12 @@ pub async fn model_stream(
         if let Some(k) = &key {
             rb = rb.header("Authorization", format!("Bearer {k}"));
         }
-        let mut resp = rb.send().await.map_err(|e| e.to_string())?;
+        let mut resp = rb.send().await.map_err(sanitize_error)?;
         if !resp.status().is_success() {
             return Err(http_error(resp, &req.model).await);
         }
         let mut buf = String::new();
-        while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        while let Some(chunk) = resp.chunk().await.map_err(sanitize_error)? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(idx) = buf.find('\n') {
                 let line = buf[..idx].trim().to_string();
@@ -222,7 +266,7 @@ pub async fn model_stream(
                         .and_then(|c| c.as_str())
                     {
                         if !tok.is_empty() {
-                            on_event.send(tok.to_string()).map_err(|e| e.to_string())?;
+                            on_event.send(tok.to_string()).map_err(sanitize_error)?;
                         }
                     }
                 }
@@ -231,4 +275,91 @@ pub async fn model_stream(
     }
 
     Ok(served)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_req() -> ModelReq {
+        ModelReq {
+            kind: "ollama".to_string(),
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama3.1".to_string(),
+            key_name: None,
+            fallback_key: Some("sk-abcdefghijklmnopqrstuvwxyz".to_string()),
+            temperature: 0.7,
+            num_ctx: 8192,
+            messages: vec![ChatMsg {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            }],
+            cloud: false,
+        }
+    }
+
+    #[test]
+    fn model_list_validation_rejects_unsafe_inputs_before_network() {
+        assert!(
+            validate_model_list_request("unknown", "http://localhost:11434", &None)
+                .unwrap_err()
+                .contains("unknown endpoint kind")
+        );
+        assert!(
+            validate_model_list_request("ollama", "file:///C:/secret.txt", &None)
+                .unwrap_err()
+                .contains("file URLs")
+        );
+        assert!(
+            validate_model_list_request("ollama", "https://user:pass@example.com", &None)
+                .unwrap_err()
+                .contains("credentials")
+        );
+        assert!(validate_model_list_request(
+            "ollama",
+            "http://localhost:11434",
+            &Some("BAD KEY".to_string()),
+        )
+        .unwrap_err()
+        .contains("env-var"));
+    }
+
+    #[test]
+    fn model_stream_validation_rejects_invalid_request_bounds() {
+        let mut req = valid_req();
+        req.model = "bad model name".to_string();
+        assert!(validate_model_stream_request(&req)
+            .unwrap_err()
+            .contains("model name"));
+
+        let mut req = valid_req();
+        req.messages[0].content = "x".repeat(crate::validation::MAX_MESSAGE_TEXT_LENGTH + 1);
+        let err = validate_model_stream_request(&req).unwrap_err();
+        assert!(err.contains("too long"));
+        assert!(!err.contains('x'));
+
+        let mut req = valid_req();
+        req.temperature = 3.0;
+        assert!(validate_model_stream_request(&req)
+            .unwrap_err()
+            .contains("temperature"));
+
+        let mut req = valid_req();
+        req.num_ctx = 1;
+        assert!(validate_model_stream_request(&req)
+            .unwrap_err()
+            .contains("context"));
+    }
+
+    #[test]
+    fn model_errors_are_sanitized() {
+        let err = sanitize_error(
+            "HTTP 401 Bearer xyz.abc.123 token=abc123 sk-abcdefghijklmnopqrstuvwxyz",
+        );
+        assert!(err.contains("Bearer [REDACTED]"));
+        assert!(err.contains("token=[REDACTED]"));
+        assert!(err.contains("sk-[REDACTED]"));
+        assert!(!err.contains("xyz.abc.123"));
+        assert!(!err.contains("abc123"));
+    }
 }

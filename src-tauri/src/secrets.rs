@@ -7,28 +7,59 @@
 
 const SERVICE: &str = "com.codename.harness";
 
+use crate::validation::{redact_secrets, validate_secret_name};
+
+fn sanitize_error(error: impl ToString) -> String {
+    redact_secrets(&error.to_string())
+}
+
+fn validate_secret_command_name(name: &str) -> Result<(), String> {
+    validate_secret_name(name).map_err(sanitize_error)
+}
+
 #[tauri::command]
 pub fn secret_set(name: String, value: String) -> Result<(), String> {
-    let entry = keyring::Entry::new(SERVICE, &name).map_err(|e| e.to_string())?;
-    entry.set_password(&value).map_err(|e| e.to_string())
+    validate_secret_command_name(&name)?;
+    let entry = keyring::Entry::new(SERVICE, &name).map_err(sanitize_error)?;
+    entry.set_password(&value).map_err(sanitize_error)
 }
 
 #[tauri::command]
 pub fn secret_get(name: String) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(SERVICE, &name).map_err(|e| e.to_string())?;
+    validate_secret_command_name(&name)?;
+    let entry = keyring::Entry::new(SERVICE, &name).map_err(sanitize_error)?;
     match entry.get_password() {
         Ok(v) => Ok(Some(v)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(sanitize_error(e)),
     }
 }
 
 #[tauri::command]
 pub fn secret_delete(name: String) -> Result<(), String> {
-    let entry = keyring::Entry::new(SERVICE, &name).map_err(|e| e.to_string())?;
+    validate_secret_command_name(&name)?;
+    let entry = keyring::Entry::new(SERVICE, &name).map_err(sanitize_error)?;
     match entry.delete_password() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(sanitize_error(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_command_validation_rejects_bad_names_without_keychain_access() {
+        for name in ["../OPENAI_API_KEY", "BAD KEY", "TOKEN;rm", "x"] {
+            assert!(validate_secret_command_name(name).is_err());
+        }
+    }
+
+    #[test]
+    fn secret_command_validation_allows_env_style_names() {
+        assert!(validate_secret_command_name("GEMINI_API_KEY").is_ok());
+        assert!(validate_secret_command_name("CUSTOM_API_KEY").is_ok());
     }
 }

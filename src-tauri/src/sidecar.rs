@@ -13,6 +13,8 @@ use std::thread;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
+use crate::validation::{redact_secrets, validate_sidecar_message};
+
 #[derive(Default, Clone, Serialize)]
 pub struct SidecarInfo {
     pub status: String, // stopped | starting | ready | error
@@ -209,6 +211,14 @@ impl SidecarManager {
     }
 }
 
+fn sanitize_error(error: impl ToString) -> String {
+    redact_secrets(&error.to_string())
+}
+
+fn validate_sidecar_command_message(message: &str) -> Result<(), String> {
+    validate_sidecar_message(message).map_err(sanitize_error)
+}
+
 #[tauri::command]
 pub fn sidecar_info(mgr: State<SidecarManager>) -> SidecarInfo {
     mgr.snapshot()
@@ -231,11 +241,11 @@ pub fn sidecar_cancel(mgr: State<SidecarManager>) {
 /// its agent card and checking the protocol version (Phase 1.5).
 async fn verify_agent_card(client: &reqwest::Client, host: &str, port: u16) -> Result<(), String> {
     let url = format!("http://{}:{}/.well-known/agent-card.json", host, port);
-    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let resp = client.get(&url).send().await.map_err(sanitize_error)?;
     if !resp.status().is_success() {
         return Err(format!("agent card HTTP {}", resp.status().as_u16()));
     }
-    let card: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let card: serde_json::Value = resp.json().await.map_err(sanitize_error)?;
     let proto = card
         .get("protocolVersion")
         .and_then(|v| v.as_str())
@@ -260,6 +270,7 @@ pub async fn sidecar_send(
     if !gates.tools_open() {
         return Err("tools gate closed".to_string());
     }
+    validate_sidecar_command_message(&message)?;
     let info = mgr.snapshot();
     if info.status != "ready" {
         return Err("sidecar not ready".to_string());
@@ -290,7 +301,7 @@ pub async fn sidecar_send(
         .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(120))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(sanitize_error)?;
     verify_agent_card(&client, &info.host, info.port).await?;
     let resp = client
         .post(&url)
@@ -298,11 +309,11 @@ pub async fn sidecar_send(
         .json(&payload)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(sanitize_error)?;
     if !resp.status().is_success() {
         return Err(format!("A2A HTTP {}", resp.status().as_u16()));
     }
-    let v: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let v: serde_json::Value = resp.json().await.map_err(sanitize_error)?;
     let text = v
         .get("result")
         .and_then(|r| r.get("parts"))
@@ -330,6 +341,7 @@ pub async fn sidecar_stream(
     if !gates.tools_open() {
         return Err("tools gate closed".to_string());
     }
+    validate_sidecar_command_message(&message)?;
     let info = mgr.snapshot();
     if info.status != "ready" {
         return Err("sidecar not ready".to_string());
@@ -359,7 +371,7 @@ pub async fn sidecar_stream(
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(5))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(sanitize_error)?;
     verify_agent_card(&client, &info.host, info.port).await?;
     mgr.cancel.store(false, Ordering::SeqCst);
     let mut resp = client
@@ -368,14 +380,14 @@ pub async fn sidecar_stream(
         .json(&payload)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(sanitize_error)?;
     if !resp.status().is_success() {
         return Err(format!("A2A HTTP {}", resp.status().as_u16()));
     }
 
     // Read the SSE body incrementally and forward each message event's text.
     let mut buf = String::new();
-    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+    while let Some(chunk) = resp.chunk().await.map_err(sanitize_error)? {
         if mgr.cancel.load(Ordering::SeqCst) {
             break; // STOP pressed — end the stream cleanly
         }
@@ -410,7 +422,7 @@ pub async fn sidecar_stream(
                 })
                 .unwrap_or_default();
             if !text.is_empty() {
-                on_event.send(text).map_err(|e| e.to_string())?;
+                on_event.send(text).map_err(sanitize_error)?;
             }
         }
     }
@@ -448,7 +460,28 @@ mod tests {
         let g = GateState::default();
         assert!(g.tools_open() && g.network_open() && g.filesystem_open());
         g.tools.store(false, Ordering::SeqCst);
-        assert!(!g.tools_open(), "a closed tools gate must read as closed (bridge severed)");
-        assert!(g.network_open(), "closing tools must not affect other gates");
+        assert!(
+            !g.tools_open(),
+            "a closed tools gate must read as closed (bridge severed)"
+        );
+        assert!(
+            g.network_open(),
+            "closing tools must not affect other gates"
+        );
+    }
+
+    #[test]
+    fn sidecar_command_validation_rejects_oversized_message_without_echoing_content() {
+        let message = "x".repeat(crate::validation::MAX_MESSAGE_TEXT_LENGTH + 1);
+        let err = validate_sidecar_command_message(&message).unwrap_err();
+        assert!(err.contains("too long"));
+        assert!(!err.contains('x'));
+    }
+
+    #[test]
+    fn sidecar_command_validation_rejects_blank_message() {
+        assert!(validate_sidecar_command_message("   ")
+            .unwrap_err()
+            .contains("required"));
     }
 }
