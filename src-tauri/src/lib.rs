@@ -1,6 +1,7 @@
 mod model;
 mod secrets;
 mod sidecar;
+pub mod validation;
 use sidecar::SidecarManager;
 use tauri::Manager;
 
