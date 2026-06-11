@@ -79,6 +79,7 @@ export async function cancelSidecar(): Promise<void> {
 export interface A2ACallbacks {
   onToken: (t: string) => void;
   onActivity?: (kind: 'network' | 'system', t: string) => void;
+  onDenied?: (category: 'sidecar', reason: string) => void;
   signal?: AbortSignal;
 }
 
@@ -108,7 +109,11 @@ export async function streamA2A(
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${info.token}` },
     body,
   });
-  if (!res.ok || !res.body) throw new Error(`A2A HTTP ${res.status}`);
+  if (!res.ok || !res.body) {
+    const reason = `A2A HTTP ${res.status}`;
+    cb.onDenied?.('sidecar', reason);
+    throw new Error(reason);
+  }
 
   const reader = res.body.getReader();
   const dec = new TextDecoder();

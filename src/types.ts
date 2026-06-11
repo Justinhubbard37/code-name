@@ -184,8 +184,27 @@ export type SidecarStatus =
 /* Phase 0 contracts — gated KG write audit (P0.3)                     */
 /* ------------------------------------------------------------------ */
 
-export type AuditAction = 'create' | 'update' | 'delete' | 'link' | 'unlink';
-export type GateName = keyof SecurityGates;
+export type AuditAction =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'link'
+  | 'unlink'
+  | 'endpoint-deny'
+  | 'secret-deny'
+  | 'sidecar-deny'
+  | 'tool-deny'
+  | 'a2ui-deny'
+  | 'browser-deny';
+export type GateName =
+  | keyof SecurityGates
+  | 'endpoint'
+  | 'secret'
+  | 'sidecar'
+  | 'tool'
+  | 'a2ui'
+  | 'browser'
+  | 'policy';
 
 export interface GateDecision {
   allowed: boolean;
@@ -209,7 +228,7 @@ export interface AuditRecord {
   ts: number;
   actor: AuditActor;
   action: AuditAction;
-  target: { kind: 'node' | 'edge'; id: string };
+  target: { kind: 'node' | 'edge' | 'security'; id: string };
   before?: unknown; // snapshot or content hash
   after?: unknown;
   diff?: string; // human-readable summary

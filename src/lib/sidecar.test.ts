@@ -54,7 +54,14 @@ describe('streamA2A (A2A SSE parser)', () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue({ ok: false, status: 401, body: null } as unknown as Response) as unknown as typeof fetch;
+    const denials: string[] = [];
 
-    await expect(streamA2A(info, 'q', { onToken: () => {} })).rejects.toThrow(/401/);
+    await expect(
+      streamA2A(info, 'q', {
+        onToken: () => {},
+        onDenied: (category, reason) => denials.push(`${category}:${reason}`),
+      }),
+    ).rejects.toThrow(/401/);
+    expect(denials).toEqual(['sidecar:A2A HTTP 401']);
   });
 });

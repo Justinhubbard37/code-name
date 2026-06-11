@@ -28,7 +28,7 @@ export function evaluateScopedKgWrite(global: SecurityGates, caps: TabCaps): Gat
 export function makeAudit(p: {
   actor: AuditActor;
   action: AuditAction;
-  target: { kind: 'node' | 'edge'; id: string };
+  target: { kind: 'node' | 'edge' | 'security'; id: string };
   decision: GateDecision;
   before?: unknown;
   after?: unknown;

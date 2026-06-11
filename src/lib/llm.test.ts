@@ -84,12 +84,15 @@ describe('reachesNetwork (what the Network gate governs)', () => {
       contextWindow: 4096,
     };
     const tokens: string[] = [];
+    const denials: string[] = [];
 
     await streamChat(endpoint, profile, [{ role: 'user', content: 'hello' }], {
       onToken: (t) => tokens.push(t),
+      onDenied: (category, reason) => denials.push(`${category}:${reason}`),
     });
 
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(tokens.join('')).toMatch(/LOCAL SYNTHETIC NODE/);
+    expect(denials.some((d) => d.startsWith('endpoint:'))).toBe(true);
   });
 });

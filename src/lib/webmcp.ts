@@ -5,6 +5,8 @@
  * through a gate guard + activity logger before running. Swap for a native API
  * or community polyfill later behind this same surface.
  */
+import { validateWebMcpArgs, validateWebMcpToolName } from './securityValidation';
+
 export interface WebMcpResult {
   content: { type: 'text'; text: string }[];
 }
@@ -65,17 +67,30 @@ export function getTools(): ToolMeta[] {
   }));
 }
 
-export async function executeTool(name: string, args: Record<string, unknown> = {}): Promise<WebMcpResult> {
+export async function executeTool(name: string, args: unknown = {}): Promise<WebMcpResult> {
+  const nameCheck = validateWebMcpToolName(name);
+  if (nameCheck.ok === false) {
+    logger(name, false, nameCheck.error);
+    return { content: [{ type: 'text', text: `[error] ${nameCheck.error}` }] };
+  }
   const t = tools.get(name);
-  if (!t) return { content: [{ type: 'text', text: `[error] unknown tool: ${name}` }] };
-  const decision = guard(name, args);
+  if (!t) {
+    logger(name, false, 'unknown WebMCP tool');
+    return { content: [{ type: 'text', text: `[error] unknown tool: ${name}` }] };
+  }
+  const argCheck = validateWebMcpArgs(args);
+  if (argCheck.ok === false) {
+    logger(name, false, argCheck.error);
+    return { content: [{ type: 'text', text: `[error] ${argCheck.error}` }] };
+  }
+  const decision = guard(name, argCheck.value);
   if (!decision.allowed) {
     logger(name, false, decision.reason);
     return { content: [{ type: 'text', text: `[blocked] ${decision.reason ?? 'gated'}` }] };
   }
   logger(name, true);
   try {
-    return await t.execute(args);
+    return await t.execute(argCheck.value);
   } catch (e) {
     return { content: [{ type: 'text', text: `[error] ${e instanceof Error ? e.message : 'failed'}` }] };
   }

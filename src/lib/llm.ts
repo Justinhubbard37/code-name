@@ -19,6 +19,7 @@ export interface ChatTurn {
 export interface StreamCallbacks {
   onToken: (token: string) => void;
   onActivity?: (kind: 'network' | 'reasoning' | 'tool' | 'system', text: string) => void;
+  onDenied?: (category: 'endpoint', reason: string) => void;
   /** Fired once with the model the server actually used (read from the response). */
   onModel?: (model: string) => void;
   signal?: AbortSignal;
@@ -211,6 +212,7 @@ export async function streamChat(
     return await streamOpenAI(ep, profile, turns, cb); // openai | lmstudio | custom
   } catch (err) {
     const reason = err instanceof Error ? err.message : 'error';
+    cb.onDenied?.('endpoint', reason);
     cb.onActivity?.('system', `endpoint failed (${reason}) — synthetic fallback`);
     return await syntheticStream(turns, cb, reason);
   }

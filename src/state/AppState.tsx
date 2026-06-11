@@ -28,6 +28,7 @@ import type {
   ChatMessage,
   ConfigProfile,
   Endpoint,
+  GateName,
   NodeData,
   QuarantineItem,
   SecurityGates,
@@ -57,6 +58,12 @@ import { getSidecarInfo, streamFromSidecar, cancelSidecar } from '../lib/sidecar
 import { installWebMcp, setToolGuard, setToolLogger, registerTool } from '../lib/webmcp';
 import { setAgentUI } from '../components/right/a2ui/bus';
 import type { A2UIPayload } from '../components/right/a2ui/types';
+import { validateA2UIPayload } from '../lib/securityValidation';
+import {
+  auditDeniedSecurityAction,
+  setSecurityAuditSink,
+  type SecurityAuditCategory,
+} from '../lib/securityAudit';
 import { effectiveGates, FULL_CAPS } from '../lib/perms';
 import { runSelfCheck } from '../lib/selfcheck';
 import { lease as poolLease, releaseAll as poolReleaseAll } from '../lib/pools';
@@ -290,6 +297,35 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return effectiveGates(gatesRef.current, task?.session.caps ?? FULL_CAPS);
   }, []);
 
+  useEffect(() => {
+    setSecurityAuditSink((record) => kgStore.appendAudit(record).catch(() => {}));
+    return () => setSecurityAuditSink(null);
+  }, []);
+
+  const auditDenied = useCallback(
+    (
+      category: SecurityAuditCategory,
+      reason: unknown,
+      opts?: { targetId?: string; gate?: GateName },
+    ) => {
+      const taskId = activeTaskIdRef.current;
+      const task = tasksRef.current.find((t) => t.id === taskId);
+      auditDeniedSecurityAction({
+        category,
+        reason,
+        targetId: opts?.targetId,
+        gate: opts?.gate,
+        actor: {
+          kind: 'user',
+          id: 'director',
+          taskId,
+          sessionId: task?.session.id,
+        },
+      });
+    },
+    [],
+  );
+
   // Save config (endpoints, presets, active preset, gates) whenever it changes.
   useEffect(() => {
     saveConfig({ endpoints, profiles, activeProfileId, gates });
@@ -377,10 +413,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           };
         }
         if (!gates.network && reachesNetwork(e)) {
+          auditDenied('endpoint', 'network gate closed', {
+            gate: 'network',
+            targetId: `endpoint:${e.id}`,
+          });
           return { id: e.id, status: 'offline', detail: 'network gate closed' };
         }
         const r = await pingEndpoint(e);
-        if (!r.ok) return { id: e.id, status: 'error', detail: r.detail };
+        if (!r.ok) {
+          auditDenied('endpoint', r.detail, {
+            gate: 'endpoint',
+            targetId: `endpoint:${e.id}`,
+          });
+          return { id: e.id, status: 'error', detail: r.detail };
+        }
         // Reachable — find out which models are actually installed and make sure
         // the selected one exists. A missing model is the #1 cause of "READY but
         // it won't answer" (the probe hits /api/tags, which is fine even when the
@@ -415,7 +461,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         };
       }),
     );
-  }, [gates.network]);
+  }, [auditDenied, gates.network]);
 
   /* ---- chat ---- */
   const [sending, setSending] = useState(false);
@@ -546,6 +592,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       abortRef.current = ctl;
 
       if (!gates.network && reachesNetwork(ep)) {
+        auditDenied('endpoint', 'network gate closed', {
+          gate: 'network',
+          targetId: `model:${ep.id}`,
+        });
         patchTask(taskId, (t) => ({
           ...t,
           messages: t.messages.map((m) =>
@@ -568,6 +618,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // Route to the local agent sidecar over A2A when that endpoint is active.
       if (ep.kind === 'a2a') {
         if (!gates.tools) {
+          auditDenied('sidecar', 'tools gate closed', {
+            gate: 'tools',
+            targetId: 'sidecar_stream',
+          });
           patchTask(taskId, (t) => ({
             ...t,
             messages: t.messages.map((m) =>
@@ -599,6 +653,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             })),
           );
         } catch (err) {
+          auditDenied('sidecar', err instanceof Error ? err.message : 'sidecar unavailable', {
+            gate: 'sidecar',
+            targetId: 'sidecar_stream',
+          });
           patchTask(taskId, (t) => ({
             ...t,
             messages: t.messages.map((m) =>
@@ -632,6 +690,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             servedModel = m;
             setRunningModel(m);
           },
+          onDenied: (_category, reason) =>
+            auditDenied('endpoint', reason, {
+              gate: 'endpoint',
+              targetId: `model:${ep.id}`,
+            }),
           onToken: (tok) =>
             patchTask(taskId, (t) => ({
               ...t,
@@ -678,7 +741,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         }));
       }
     },
-    [sending, activeTaskId, activeEndpoint, activeProfile, gates.network, gates.tools, patchTask, pushActivity, tasks],
+    [sending, activeTaskId, activeEndpoint, activeProfile, gates.network, gates.tools, patchTask, pushActivity, tasks, auditDenied],
   );
 
   const abort = useCallback(() => {
@@ -738,13 +801,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       const eff = effectiveGates(gatesRef.current, caps);
       return eff.tools ? { allowed: true } : { allowed: false, reason: 'tools gate/scope closed' };
     });
-    setToolLogger((name, allowed, detail) =>
+    setToolLogger((name, allowed, detail) => {
+      if (!allowed) {
+        auditDenied('tool', detail ?? 'tool denied', {
+          gate: 'tool',
+          targetId: name,
+        });
+      }
       pushActivity(
         activeTaskIdRef.current,
         'tool',
         `${allowed ? 'tool' : 'tool blocked'}: ${name}${detail ? ` (${detail})` : ''}`,
-      ),
-    );
+      );
+    });
     const ctl = new AbortController();
     registerTool(
       {
@@ -780,7 +849,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         description: 'Render an A2UI payload into the Agent UI panel.',
         inputSchema: { type: 'object', properties: { root: { type: 'string' }, components: { type: 'array' } }, required: ['root', 'components'] },
         execute: (args) => {
-          setAgentUI(args as unknown as A2UIPayload);
+          const payload = validateA2UIPayload(args);
+          if (payload.ok === false) {
+            auditDenied('a2ui', payload.error, {
+              gate: 'a2ui',
+              targetId: 'ui.render',
+            });
+            return { content: [{ type: 'text', text: `[blocked] ${payload.error}` }] };
+          }
+          setAgentUI(payload.value as A2UIPayload);
           return { content: [{ type: 'text', text: 'rendered' }] };
         },
       },
@@ -795,10 +872,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           const taskId = activeTaskIdRef.current;
           const task = tasksRef.current.find((t) => t.id === taskId);
           if (!task?.session.caps.browser) {
+            auditDenied('browser', 'this tab lacks BROWSER permission', {
+              gate: 'browser',
+              targetId: 'browser.open',
+            });
             return { content: [{ type: 'text', text: '[blocked] this tab lacks BROWSER permission' }] };
           }
           const lz = poolLease('browser', taskId);
-          if (!lz.ok) return { content: [{ type: 'text', text: `[blocked] ${lz.reason}` }] };
+          if (!lz.ok) {
+            auditDenied('browser', lz.reason, {
+              gate: 'browser',
+              targetId: 'browser.open',
+            });
+            return { content: [{ type: 'text', text: `[blocked] ${lz.reason}` }] };
+          }
           pushActivity(taskId, 'tool', `browser ctx ${lz.id} → ${String(args.url)}`);
           // SEAM: forward to the sidecar Browser Harness (CDP) over A2A.
           const info = await getSidecarInfo();
@@ -824,7 +911,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ),
     );
     return () => ctl.abort();
-  }, [createDocNode, pushActivity]);
+  }, [createDocNode, pushActivity, auditDenied]);
 
   const ingestFiles = useCallback(
     async (files: File[]) => {

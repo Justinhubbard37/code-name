@@ -1,3 +1,5 @@
+import { auditDeniedSecurityAction } from './securityAudit';
+
 /**
  * Secrets bridge (Phase 2.4). Reads/writes API keys in the OS keychain through
  * the Rust shell. All access is Tauri-guarded so the app still runs in a plain
@@ -13,7 +15,13 @@ export async function getSecret(name: string): Promise<string | null> {
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     return await invoke<string | null>('secret_get', { name });
-  } catch {
+  } catch (err) {
+    auditDeniedSecurityAction({
+      category: 'secret',
+      targetId: 'secret_get',
+      reason: err instanceof Error ? err.message : 'secret lookup rejected',
+      actor: { kind: 'user', id: 'director' },
+    });
     return null;
   }
 }
@@ -25,7 +33,13 @@ export async function setSecret(name: string, value: string): Promise<boolean> {
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('secret_set', { name, value });
     return true;
-  } catch {
+  } catch (err) {
+    auditDeniedSecurityAction({
+      category: 'secret',
+      targetId: 'secret_set',
+      reason: err instanceof Error ? err.message : 'secret set rejected',
+      actor: { kind: 'user', id: 'director' },
+    });
     return false;
   }
 }
@@ -36,7 +50,13 @@ export async function deleteSecret(name: string): Promise<void> {
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('secret_delete', { name });
-  } catch {
+  } catch (err) {
+    auditDeniedSecurityAction({
+      category: 'secret',
+      targetId: 'secret_delete',
+      reason: err instanceof Error ? err.message : 'secret delete rejected',
+      actor: { kind: 'user', id: 'director' },
+    });
     /* ignore */
   }
 }
